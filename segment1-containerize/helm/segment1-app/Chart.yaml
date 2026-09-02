@@ -1,0 +1,6 @@
+apiVersion: v2
+name: segment1-app
+description: Minimal placeholder service for Segment 1 (containerize & deploy)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

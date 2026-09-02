@@ -1,0 +1,20 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+tfplan
+*.tfvars          # may contain account-specific values you don't want public
+# Note: .terraform.lock.hcl is intentionally NOT ignored -- it pins exact
+# provider versions and should be committed, same as a package-lock.json.
+
+# The LB controller's IAM policy JSON is fetched via curl per DEPLOY.md,
+# not committed -- keeps the repo from carrying a copy that goes stale
+iam_policy_lb_controller.json
+
+# OS/editor junk
+.DS_Store
+.vscode/
+*.swp
+
+# Docker
+*.log
