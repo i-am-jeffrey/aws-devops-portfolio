@@ -46,7 +46,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout (full history — Gitleaks needs it to scan past commits)
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload Gitleaks SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: gitleaks.sarif
 
@@ -91,7 +91,7 @@ jobs:
 
       - name: Upload Semgrep SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: semgrep.sarif
 
@@ -106,6 +106,7 @@ jobs:
             -d segment1-containerize/terraform \
             --framework terraform \
             --download-external-modules true \
+            --config-file .checkov.yaml \
             -o sarif \
             --output-file-path checkov-output
           CHECKOV_EXIT=$?
@@ -126,7 +127,7 @@ jobs:
 
       - name: Upload Checkov SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: checkov.sarif
 
@@ -160,7 +161,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Assume AWS role via OIDC (build role -- ECR push only, nothing else)
         uses: aws-actions/configure-aws-credentials@v4
@@ -207,7 +208,7 @@ jobs:
 
       - name: Upload Trivy SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           sarif_file: trivy.sarif
 
