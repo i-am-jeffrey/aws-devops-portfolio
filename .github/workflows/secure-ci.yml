@@ -1,0 +1,131 @@
+# Place this file at: .github/workflows/secure-ci.yml
+#
+# STEP 1 OF 3 -- fixed version. Changes from the first attempt:
+#   1. actions/checkout bumped v4 -> v6 (drops the Node.js 20 warning;
+#      note: GitHub's own docs disagree with each other on v5 vs v6 --
+#      the GHEC-specific docs page shows v5, the main github.com docs
+#      page shows v6. Went with v6 as the one targeting github.com
+#      itself, but flagging the disagreement rather than hiding it.)
+#   2. github/codeql-action/upload-sarif bumped v3 -> v4 (v3 logs a
+#      deprecation warning as of this writing; deprecated outright
+#      December 2026)
+#   3. All three scan steps now capture their tool's real exit code,
+#      ALWAYS attempt to produce/rename the SARIF report regardless of
+#      that code, and only then fail the step deliberately.
+#   4. All three scan steps (not just their Upload counterparts) now
+#      have `if: always()`. Without this, GitHub Actions' default
+#      behavior skips every step after the first failure in a job --
+#      so Semgrep finding real issues and failing was silently
+#      preventing Checkov from ever running at all. This was the actual
+#      root cause of "checkov.sarif missing" -- not a filename guess
+#      problem, a step-skipping problem. Each scanner should run
+#      independently of whether an earlier one found something; only
+#      the job's overall pass/fail should reflect all three combined.
+
+name: secure-ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: secure-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-scans:
+    name: Secrets, SAST, IaC scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout (full history — Gitleaks needs it to scan past commits)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks — scan for committed secrets
+        if: always()   # <- this line is the actual fix. Without it, if an earlier
+                        #    step in this job fails, GitHub skips every step after
+                        #    it by default -- this scan would never even run.
+        run: |
+          set +e
+          docker run --rm -v "$(pwd):/repo" -w /repo ghcr.io/gitleaks/gitleaks:latest \
+            detect \
+              --source /repo \
+              --report-format sarif \
+              --report-path /repo/gitleaks.sarif \
+              --redact \
+              --verbose
+          GITLEAKS_EXIT=$?
+          set -e
+          exit $GITLEAKS_EXIT
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gitleaks.sarif
+
+      - name: Semgrep — SAST
+        if: always()   # <- same reason as Gitleaks above: without this, Gitleaks
+                        #    failing would silently skip Semgrep and Checkov too
+        run: |
+          set +e
+          docker run --rm -v "$(pwd):/src" -w /src semgrep/semgrep \
+            semgrep scan . \
+              --config=p/security-audit \
+              --config=p/secrets \
+              --config=p/owasp-top-ten \
+              --sarif --output=semgrep.sarif \
+              --error
+          SEMGREP_EXIT=$?
+          set -e
+          exit $SEMGREP_EXIT
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: semgrep.sarif
+
+      - name: Checkov — IaC scan (all of Segment 1's Terraform, including bootstrap/ and ci-cd-iam.tf)
+        if: always()   # <- THIS is the line that fixes what you actually saw:
+                        #    Semgrep failed, and without this, Checkov never got
+                        #    a chance to run at all -- hence no checkov-output/
+        run: |
+          set +e
+          mkdir -p checkov-output
+          docker run --rm -v "$(pwd):/work" -w /work bridgecrew/checkov \
+            -d segment1-containerize/terraform \
+            --framework terraform \
+            --download-external-modules true \
+            -o sarif \
+            --output-file-path checkov-output
+          CHECKOV_EXIT=$?
+          set -e
+          # Don't guess Checkov's exact output filename (that guess was wrong
+          # twice already -- a known Checkov bug means its own log message
+          # claims one filename while writing a different one to disk).
+          # Instead, find whatever .sarif file actually exists and use that.
+          FOUND_SARIF=$(find checkov-output -name "*.sarif" 2>/dev/null | head -n1)
+          if [ -n "$FOUND_SARIF" ]; then
+            cp "$FOUND_SARIF" checkov.sarif
+            echo "Found and copied: $FOUND_SARIF"
+          else
+            echo "::warning::No .sarif file found under checkov-output/ -- see the listing below for what Checkov actually wrote"
+            ls -la checkov-output/ 2>/dev/null || echo "checkov-output/ doesn't even exist -- Checkov may have failed before producing any output at all"
+          fi
+          exit $CHECKOV_EXIT
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: checkov.sarif
