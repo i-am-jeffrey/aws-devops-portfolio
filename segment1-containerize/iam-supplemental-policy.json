@@ -27,13 +27,13 @@
         "iam:DeletePolicyVersion"
       ],
       "Resource": [
-        "arn:aws:iam::<ACCOUNT_ID>:role/segment1-app-*",
-        "arn:aws:iam::<ACCOUNT_ID>:policy/segment1-app-*",
-        "arn:aws:iam::<ACCOUNT_ID>:role/default-eks-node-group-*"
+        "arn:aws:iam::411714852651:role/segment1-app-*",
+        "arn:aws:iam::411714852651:policy/segment1-app-*",
+        "arn:aws:iam::411714852651:role/default-eks-node-group-*"
       ]
     },
     {
-      "Sid": "OIDCProviderForIRSA",
+      "Sid": "OIDCProviderForIRSAAndGitHubActions",
       "Effect": "Allow",
       "Action": [
         "iam:CreateOpenIDConnectProvider",
@@ -41,15 +41,24 @@
         "iam:GetOpenIDConnectProvider",
         "iam:TagOpenIDConnectProvider"
       ],
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/*"
+      "Resource": [
+        "arn:aws:iam::411714852651:oidc-provider/oidc.eks.ap-southeast-1.amazonaws.com/id/*",
+        "arn:aws:iam::411714852651:oidc-provider/token.actions.githubusercontent.com"
+      ]
+    },
+    {
+      "Sid": "ListOIDCProvidersAccountWide",
+      "Effect": "Allow",
+      "Action": "iam:ListOpenIDConnectProviders",
+      "Resource": "*"
     },
     {
       "Sid": "PassRoleScopedToEKSAndEC2Only",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
-        "arn:aws:iam::<ACCOUNT_ID>:role/segment1-app-*",
-        "arn:aws:iam::<ACCOUNT_ID>:role/default-eks-node-group-*"
+        "arn:aws:iam::411714852651:role/segment1-app-*",
+        "arn:aws:iam::411714852651:role/default-eks-node-group-*"
       ],
       "Condition": {
         "StringEquals": {
@@ -64,22 +73,22 @@
       "Sid": "ReadOwnSSOSessionRole",
       "Effect": "Allow",
       "Action": "iam:GetRole",
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/aws-reserved/sso.amazonaws.com/*"
+      "Resource": "arn:aws:iam::411714852651:role/aws-reserved/sso.amazonaws.com/*"
     },
     {
       "Sid": "CheckServiceLinkedRoleExists",
       "Effect": "Allow",
       "Action": "iam:GetRole",
       "Resource": [
-        "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/*",
-        "arn:aws:iam::<ACCOUNT_ID>:role/AWSServiceRoleFor*"
+        "arn:aws:iam::411714852651:role/aws-service-role/*",
+        "arn:aws:iam::411714852651:role/AWSServiceRoleFor*"
       ]
     },
     {
       "Sid": "CreateServiceLinkedRoleScoped",
       "Effect": "Allow",
       "Action": "iam:CreateServiceLinkedRole",
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/*",
+      "Resource": "arn:aws:iam::411714852651:role/aws-service-role/*",
       "Condition": {
         "StringEquals": {
           "iam:AWSServiceName": [
