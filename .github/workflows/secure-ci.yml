@@ -11,10 +11,16 @@
 #      December 2026)
 #   3. All three scan steps now capture their tool's real exit code,
 #      ALWAYS attempt to produce/rename the SARIF report regardless of
-#      that code, and only then fail the step deliberately -- so a real
-#      finding still fails the pipeline (correct), but never again
-#      silently loses the report on the way there (the actual bug from
-#      the first run).
+#      that code, and only then fail the step deliberately.
+#   4. All three scan steps (not just their Upload counterparts) now
+#      have `if: always()`. Without this, GitHub Actions' default
+#      behavior skips every step after the first failure in a job --
+#      so Semgrep finding real issues and failing was silently
+#      preventing Checkov from ever running at all. This was the actual
+#      root cause of "checkov.sarif missing" -- not a filename guess
+#      problem, a step-skipping problem. Each scanner should run
+#      independently of whether an earlier one found something; only
+#      the job's overall pass/fail should reflect all three combined.
 
 name: secure-ci
 
@@ -45,6 +51,9 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks — scan for committed secrets
+        if: always()   # <- this line is the actual fix. Without it, if an earlier
+                        #    step in this job fails, GitHub skips every step after
+                        #    it by default -- this scan would never even run.
         run: |
           set +e
           docker run --rm -v "$(pwd):/repo" -w /repo ghcr.io/gitleaks/gitleaks:latest \
@@ -65,6 +74,8 @@ jobs:
           sarif_file: gitleaks.sarif
 
       - name: Semgrep — SAST
+        if: always()   # <- same reason as Gitleaks above: without this, Gitleaks
+                        #    failing would silently skip Semgrep and Checkov too
         run: |
           set +e
           docker run --rm -v "$(pwd):/src" -w /src semgrep/semgrep \
@@ -85,18 +96,32 @@ jobs:
           sarif_file: semgrep.sarif
 
       - name: Checkov — IaC scan (all of Segment 1's Terraform, including bootstrap/ and ci-cd-iam.tf)
+        if: always()   # <- THIS is the line that fixes what you actually saw:
+                        #    Semgrep failed, and without this, Checkov never got
+                        #    a chance to run at all -- hence no checkov-output/
         run: |
           set +e
+          mkdir -p checkov-output
           docker run --rm -v "$(pwd):/work" -w /work bridgecrew/checkov \
             -d segment1-containerize/terraform \
             --framework terraform \
+            --download-external-modules true \
             -o sarif \
-            --output-file-path .
+            --output-file-path checkov-output
           CHECKOV_EXIT=$?
           set -e
-          # ALWAYS attempt this, regardless of CHECKOV_EXIT above -- this
-          # is the line that didn't run last time.
-          mv results_sarif.sarif checkov.sarif 2>/dev/null || echo "::warning::checkov.sarif rename failed -- check the raw log above for Checkov's actual output filename"
+          # Don't guess Checkov's exact output filename (that guess was wrong
+          # twice already -- a known Checkov bug means its own log message
+          # claims one filename while writing a different one to disk).
+          # Instead, find whatever .sarif file actually exists and use that.
+          FOUND_SARIF=$(find checkov-output -name "*.sarif" 2>/dev/null | head -n1)
+          if [ -n "$FOUND_SARIF" ]; then
+            cp "$FOUND_SARIF" checkov.sarif
+            echo "Found and copied: $FOUND_SARIF"
+          else
+            echo "::warning::No .sarif file found under checkov-output/ -- see the listing below for what Checkov actually wrote"
+            ls -la checkov-output/ 2>/dev/null || echo "checkov-output/ doesn't even exist -- Checkov may have failed before producing any output at all"
+          fi
           exit $CHECKOV_EXIT
 
       - name: Upload Checkov SARIF
@@ -104,3 +129,100 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov.sarif
+
+  # -----------------------------------------------------------------------
+  # STEP 2 OF 3 -- build, scan, push, sign.
+  #
+  # Gated to `push` on main only -- a PR (including from a fork) never
+  # reaches this job, so it never sees AWS credentials or a signing
+  # identity. This matches the build role's own trust condition
+  # (ref:refs/heads/main).
+  #
+  # Deliberately NOT using Step 1's exit-code-capture pattern here. There,
+  # we wanted one scanner's failure to never skip the others. Here, we
+  # want the opposite: if Trivy finds a real CRITICAL/HIGH, GitHub's
+  # default behavior (skip everything after) is exactly correct -- an
+  # image that failed its scan must never reach Push or Sign.
+  #
+  # Signs the image DIGEST, not the tag, after pushing -- a tag is a
+  # mutable pointer; someone could re-push different content under the
+  # same tag later and the old signature would say nothing about what's
+  # there now. The digest is what was actually scanned.
+  # -----------------------------------------------------------------------
+  build-scan-sign-push:
+    name: Build, scan, push, sign image
+    needs: static-scans
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # needed for both AWS OIDC (build role) and Cosign keyless (Sigstore) OIDC
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Assume AWS role via OIDC (build role -- ECR push only, nothing else)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::411714852651:role/segment1-app-gha-build
+          aws-region: ap-southeast-1
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image (not pushed yet)
+        id: build
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          IMAGE_REF="${{ steps.ecr-login.outputs.registry }}/segment1-app:${IMAGE_TAG}"
+          docker build \
+            --platform linux/amd64 \
+            --provenance=false \
+            -t "${IMAGE_REF}" \
+            segment1-containerize/app
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          # NOTE: --provenance=false is intentional, not an oversight -- it
+          # matches a real, already-documented problem in Segment 1's own
+          # DEPLOY.md (default provenance wraps the image in an OCI index
+          # some container runtimes don't pull cleanly). Worth revisiting
+          # in Segment 2's own architecture-decisions.md, since disabling
+          # provenance is a real trade-off against a genuine best practice,
+          # not a free win.
+
+      - name: Trivy — scan the built image before it ever reaches the registry
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$(pwd):/out" \
+            aquasec/trivy:latest \
+            image \
+              --format sarif \
+              --output /out/trivy.sarif \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1 \
+              "${{ steps.build.outputs.image_ref }}"
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+
+      - name: Push image
+        run: docker push "${{ steps.build.outputs.image_ref }}"
+
+      - name: Resolve the pushed image's digest
+        id: digest
+        run: |
+          IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.build.outputs.image_ref }}")
+          echo "image_digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: ${IMAGE_DIGEST}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image by digest — keyless, via this workflow's own GitHub OIDC identity
+        run: cosign sign --yes "${{ steps.digest.outputs.image_digest }}"
