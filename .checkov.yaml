@@ -53,3 +53,25 @@ skip-check:
     # enabled -- Checkov just can't see a default the community module
     # sets internally, since it was never explicitly written in this
     # project's own calling code.
+
+  - CKV_AWS_38
+  - CKV_AWS_39
+    # "Ensure Amazon EKS public endpoint [not accessible to 0.0.0.0/0 /
+    # disabled]." A deliberate, documented trade-off, not an oversight:
+    # this project's CI runs on GitHub-hosted runners, which have no
+    # stable IP range to allow-list, and the human accesses the cluster
+    # directly from a laptop with no VPN/bastion in place. Disabling the
+    # public endpoint would break both. Revisit if this project ever
+    # adds a self-hosted runner or bastion host.
+
+  - CKV2_AWS_12
+    # "Ensure the default security group of every VPC restricts all
+    # traffic." vpc.tf already sets manage_default_security_group=true
+    # with empty ingress/egress -- and this was verified against the
+    # REAL security group, not just the Terraform config:
+    #   aws ec2 describe-security-groups --group-ids sg-041858dbcf994aba2
+    #     --query 'SecurityGroups[0].[IpPermissions,IpPermissionsEgress]'
+    # returned two empty arrays. Genuinely locked down. This check
+    # appears to trace the aws_vpc resource directly and not the
+    # separate conditional resource this module uses to manage the
+    # default SG -- a static-analysis limitation, not a real gap.
