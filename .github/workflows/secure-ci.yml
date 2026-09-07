@@ -21,6 +21,18 @@
 #      problem, a step-skipping problem. Each scanner should run
 #      independently of whether an earlier one found something; only
 #      the job's overall pass/fail should reflect all three combined.
+#   5. All five third-party actions across both jobs are now pinned to
+#      real, confirmed commit SHAs (not floating version tags) --
+#      actions/checkout, aws-actions/configure-aws-credentials,
+#      aws-actions/amazon-ecr-login, github/codeql-action, and
+#      sigstore/cosign-installer. Each SHA was taken directly from a
+#      real GitHub Actions "Set up job" log for this repo, not guessed
+#      or sourced from a web search -- the two that needed
+#      build-scan-sign-push to actually run first (ecr-login,
+#      cosign-installer) were temporarily suppressed with a documented
+#      reason to break that chicken-and-egg dependency, then pinned for
+#      real and had that suppression removed the moment a real run
+#      produced their true SHAs.
 
 name: secure-ci
 
@@ -171,13 +183,7 @@ jobs:
 
       - name: Log in to ECR
         id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2 # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-        # TEMPORARY -- this job has never executed (blocked by static-scans
-        # failing until now), so no real run log exists anywhere with the
-        # true commit SHA this tag resolves to. Suppressing here on purpose
-        # to break that deadlock. Replace with the real SHA -- and delete
-        # this suppression -- the moment this job runs once and prints it
-        # under "Set up job", same way configure-aws-credentials was pinned.
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       - name: Build image (not pushed yet)
         id: build
@@ -229,10 +235,7 @@ jobs:
           echo "Resolved digest: ${IMAGE_DIGEST}"
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3 # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-        # TEMPORARY -- same reason as amazon-ecr-login above: this job has
-        # never run, so no real SHA exists yet. Replace and remove this
-        # suppression once this run's "Set up job" log reveals it.
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Sign image by digest — keyless, via this workflow's own GitHub OIDC identity
         run: cosign sign --yes "${{ steps.digest.outputs.image_digest }}"
