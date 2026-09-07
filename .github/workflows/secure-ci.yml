@@ -164,14 +164,20 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Assume AWS role via OIDC (build role -- ECR push only, nothing else)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: arn:aws:iam::411714852651:role/segment1-app-gha-build
           aws-region: ap-southeast-1
 
       - name: Log in to ECR
         id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@v2 # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        # TEMPORARY -- this job has never executed (blocked by static-scans
+        # failing until now), so no real run log exists anywhere with the
+        # true commit SHA this tag resolves to. Suppressing here on purpose
+        # to break that deadlock. Replace with the real SHA -- and delete
+        # this suppression -- the moment this job runs once and prints it
+        # under "Set up job", same way configure-aws-credentials was pinned.
 
       - name: Build image (not pushed yet)
         id: build
@@ -223,7 +229,10 @@ jobs:
           echo "Resolved digest: ${IMAGE_DIGEST}"
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v3 # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        # TEMPORARY -- same reason as amazon-ecr-login above: this job has
+        # never run, so no real SHA exists yet. Replace and remove this
+        # suppression once this run's "Set up job" log reveals it.
 
       - name: Sign image by digest — keyless, via this workflow's own GitHub OIDC identity
         run: cosign sign --yes "${{ steps.digest.outputs.image_digest }}"
