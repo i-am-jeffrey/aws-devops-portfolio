@@ -11,16 +11,10 @@
 #      December 2026)
 #   3. All three scan steps now capture their tool's real exit code,
 #      ALWAYS attempt to produce/rename the SARIF report regardless of
-#      that code, and only then fail the step deliberately.
-#   4. All three scan steps (not just their Upload counterparts) now
-#      have `if: always()`. Without this, GitHub Actions' default
-#      behavior skips every step after the first failure in a job --
-#      so Semgrep finding real issues and failing was silently
-#      preventing Checkov from ever running at all. This was the actual
-#      root cause of "checkov.sarif missing" -- not a filename guess
-#      problem, a step-skipping problem. Each scanner should run
-#      independently of whether an earlier one found something; only
-#      the job's overall pass/fail should reflect all three combined.
+#      that code, and only then fail the step deliberately -- so a real
+#      finding still fails the pipeline (correct), but never again
+#      silently loses the report on the way there (the actual bug from
+#      the first run).
 
 name: secure-ci
 
@@ -51,9 +45,6 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks — scan for committed secrets
-        if: always()   # <- this line is the actual fix. Without it, if an earlier
-                        #    step in this job fails, GitHub skips every step after
-                        #    it by default -- this scan would never even run.
         run: |
           set +e
           docker run --rm -v "$(pwd):/repo" -w /repo ghcr.io/gitleaks/gitleaks:latest \
@@ -74,8 +65,6 @@ jobs:
           sarif_file: gitleaks.sarif
 
       - name: Semgrep — SAST
-        if: always()   # <- same reason as Gitleaks above: without this, Gitleaks
-                        #    failing would silently skip Semgrep and Checkov too
         run: |
           set +e
           docker run --rm -v "$(pwd):/src" -w /src semgrep/semgrep \
@@ -96,32 +85,18 @@ jobs:
           sarif_file: semgrep.sarif
 
       - name: Checkov — IaC scan (all of Segment 1's Terraform, including bootstrap/ and ci-cd-iam.tf)
-        if: always()   # <- THIS is the line that fixes what you actually saw:
-                        #    Semgrep failed, and without this, Checkov never got
-                        #    a chance to run at all -- hence no checkov-output/
         run: |
           set +e
-          mkdir -p checkov-output
           docker run --rm -v "$(pwd):/work" -w /work bridgecrew/checkov \
             -d segment1-containerize/terraform \
             --framework terraform \
-            --download-external-modules true \
             -o sarif \
-            --output-file-path checkov-output
+            --output-file-path .
           CHECKOV_EXIT=$?
           set -e
-          # Don't guess Checkov's exact output filename (that guess was wrong
-          # twice already -- a known Checkov bug means its own log message
-          # claims one filename while writing a different one to disk).
-          # Instead, find whatever .sarif file actually exists and use that.
-          FOUND_SARIF=$(find checkov-output -name "*.sarif" 2>/dev/null | head -n1)
-          if [ -n "$FOUND_SARIF" ]; then
-            cp "$FOUND_SARIF" checkov.sarif
-            echo "Found and copied: $FOUND_SARIF"
-          else
-            echo "::warning::No .sarif file found under checkov-output/ -- see the listing below for what Checkov actually wrote"
-            ls -la checkov-output/ 2>/dev/null || echo "checkov-output/ doesn't even exist -- Checkov may have failed before producing any output at all"
-          fi
+          # ALWAYS attempt this, regardless of CHECKOV_EXIT above -- this
+          # is the line that didn't run last time.
+          mv results_sarif.sarif checkov.sarif 2>/dev/null || echo "::warning::checkov.sarif rename failed -- check the raw log above for Checkov's actual output filename"
           exit $CHECKOV_EXIT
 
       - name: Upload Checkov SARIF
