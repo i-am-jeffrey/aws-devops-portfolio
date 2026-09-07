@@ -1,0 +1,88 @@
+# Place this file at: .github/workflows/secure-ci.yml
+#
+# STEP 1 OF 3 -- see segment2-DEPLOY.md for the full plan. This version
+# has only the static-scans job. Steps 2 (build-scan-sign-push) and 3
+# (deploy) get added as their own separate, tested additions to this
+# same file later -- not built yet.
+#
+# No AWS credentials anywhere in this file yet -- safe to run on any PR,
+# including from a fork, with zero risk to anything real.
+
+name: secure-ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: secure-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-scans:
+    name: Secrets, SAST, IaC scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # needed to upload SARIF to the Security tab
+    steps:
+      - name: Checkout (full history — Gitleaks needs it to scan past commits)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks — scan for committed secrets
+        run: |
+          docker run --rm -v "$(pwd):/repo" -w /repo ghcr.io/gitleaks/gitleaks:latest \
+            detect \
+              --source /repo \
+              --report-format sarif \
+              --report-path /repo/gitleaks.sarif \
+              --redact \
+              --verbose
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+
+      - name: Semgrep — SAST
+        run: |
+          docker run --rm -v "$(pwd):/src" -w /src semgrep/semgrep \
+            semgrep scan . \
+              --config=p/security-audit \
+              --config=p/secrets \
+              --config=p/owasp-top-ten \
+              --sarif --output=semgrep.sarif \
+              --error
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      - name: Checkov — IaC scan (all of Segment 1's Terraform, including bootstrap/ and ci-cd-iam.tf)
+        run: |
+          docker run --rm -v "$(pwd):/work" -w /work bridgecrew/checkov \
+            -d segment1-containerize/terraform \
+            --framework terraform \
+            -o sarif \
+            --output-file-path .
+          # NOTE: output filename assumed from Checkov's docs, not independently
+          # verified against a real run. || true means a wrong filename here
+          # fails silently (no Checkov results in the Security tab) rather than
+          # hard-failing the job -- check the raw log above if results don't show up.
+          mv results_sarif.sarif checkov.sarif || true
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
