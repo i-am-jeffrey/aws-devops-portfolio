@@ -292,6 +292,15 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --region ap-southeast-1 --name segment1-app-cluster
 
+      - name: Log in to ECR
+        # Missing from the first version of this job -- AWS IAM permission
+        # (which the deploy role already has plenty of via PowerUserAccess)
+        # and registry-level authentication are two different layers.
+        # Assuming the AWS role gives cosign/docker automatic registry
+        # access was the actual bug; this step is what performs that
+        # exchange, same as in build-scan-sign-push.
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
