@@ -9,7 +9,7 @@ Every decision below is documented with the reasoning behind it, not just the ou
 | Segment | Focus | Status |
 |---|---|---|
 | 1 | Containerize and deploy a single service. Docker, Terraform, EKS, Helm, NLB | Complete |
-| 2 | Secure CI pipeline. GitHub Actions, Gitleaks, Semgrep, Trivy, Checkov, Cosign | Planned |
+| 2 | Secure CI pipeline. GitHub Actions, Gitleaks, Semgrep, Trivy, Checkov, Cosign | Complete |
 | 3 | GitOps multi-environment promotion. Argo CD, SIT/UAT/Prod, DAST and load-test gates | Planned |
 | 4 | Event-driven auto-scaling. SQS, KEDA, Karpenter, Lambda overflow | Planned |
 | 5 | Observability and security operations. Prometheus, Grafana, Loki, DefectDojo | Planned |
@@ -37,6 +37,31 @@ What's actually running:
 Full writeup: [`segment1-containerize/architecture-decisions.md`](./segment1-containerize/architecture-decisions.md)
 Full runbook: [`segment1-containerize/DEPLOY.md`](./segment1-containerize/DEPLOY.md)
 
+## Segment 2: Secure CI Pipeline
+
+```mermaid
+flowchart TD
+    A[Push to main] --> B[Static scans: Gitleaks, Semgrep, Checkov]
+    B --> C[Build image]
+    C --> D[Trivy scan]
+    D --> E[Push to ECR]
+    E --> F[Cosign sign, keyless via GitHub OIDC]
+    F --> G[Verify signature by digest]
+    G --> H[Helm upgrade -- EKS]
+```
+
+What's actually running:
+
+- A single GitHub Actions workflow, three jobs deep, each gated on the last: static analysis, then build/scan/sign/push, then deploy. A failure at any stage stops everything after it — a scan that finds something real blocks the push; a push that never happened blocks the deploy.
+- Gitleaks, Semgrep, and Checkov all run independently in the first stage (secrets, SAST, IaC), each reporting findings to GitHub's own Security tab via SARIF regardless of pass or fail. Every real finding was either fixed or explicitly accepted as a documented trade-off with a written reason — never silently suppressed.
+- Every image is scanned by Trivy before it ever reaches the registry. A CRITICAL or HIGH finding blocks the push outright, not just a warning after the fact.
+- Images are signed keylessly with Cosign, using the workflow's own short-lived GitHub OIDC identity — no signing keys stored anywhere. The deploy stage verifies that exact signature, by digest, before Helm is allowed to touch the cluster.
+- Every third-party GitHub Action across the whole pipeline is pinned to a specific commit SHA, not a floating version tag — closing a supply-chain gap most CI setups leave wide open.
+- IAM is split by function, same principle as Segment 1: one OIDC-trusted role scoped to ECR push only (build), a separate role scoped to a single Kubernetes namespace and gated to a specific GitHub Environment claim (deploy) — never one broad credential doing everything.
+- Deploy is deliberately scoped to the application layer only. Infrastructure changes stay on a manual, human-reviewed `terraform plan`/`apply` — not automated on every push. GitOps-style automated promotion is Segment 3's job, not this one's.
+
+Full runbook: [`segment2-secure-ci/DEPLOY.md`](./segment2-secure-ci/DEPLOY.md)
+
 ## Why this project is structured this way
 
-A lot of portfolio projects follow a tutorial end to end. This one doesn't. Every non-obvious choice here (Spot vs On-Demand, NLB vs ALB, a scoped permission set vs admin access, EC2 vs Fargate) was made on purpose, and the trade-offs that were rejected are written down too. The `architecture-decisions.md` file in each segment is meant to be read on its own, as the artifact that shows the reasoning, separate from the code.
+A lot of portfolio projects follow a tutorial end to end. This one doesn't. Every non-obvious choice here (Spot vs On-Demand, NLB vs ALB, a scoped permission set vs admin access, EC2 vs Fargate, verify-by-digest vs verify-by-tag, deploy automation stopping at the application layer) was made on purpose, and the trade-offs that were rejected are written down too. The `architecture-decisions.md` file in each segment is meant to be read on its own, as the artifact that shows the reasoning, separate from the code.
